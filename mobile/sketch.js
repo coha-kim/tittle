@@ -28,7 +28,7 @@
 // speed, never sensor-exposed; shape, attraction, size and colour are live.
 
 // ---- fixed config ----
-const NUM_BOIDS  = 35;
+const NUM_BOIDS  = 18;
 const SEED_COLOR = '#49b6ff';
 
 // smooth radial gradient -- base colour on the rim, lightening toward white
