@@ -10,7 +10,9 @@
 //     (own rotation only).
 //
 //   CANVAS screen -- the flock, each boid rendered in the chosen shape, wandering
-//     at a fixed autonomous speed (never sensor-exposed here). Boids have a
+//     faster as idle shake energy rises, easing back to baseline at rest.
+//     Shake speed scales only the wander clock and step, not mutual forces.
+//     Boids have a
 //     resting mutual ATTRACTION (gentle clustering) plus a small always-on
 //     anti-collapse core so they never fully overlap.
 //     Holding SIGNAL is DURATION-based, not strength-based: for as long as
@@ -24,8 +26,8 @@
 //     the new resting attraction, which then keeps drifting back to baseline
 //     at that same slow rate.
 //
-// AUTONOMOUS vs LIVE: wander() is a fixed per-boid Perlin walk at a fixed
-// speed, never sensor-exposed; shape, attraction, size and colour are live.
+// AUTONOMOUS vs LIVE: wander() keeps an independent per-boid Perlin path;
+// idle shake controls its speed, while held SIGNAL controls attraction.
 
 // ---- fixed config ----
 const NUM_BOIDS  = 35;
@@ -35,9 +37,11 @@ const SEED_COLOR = '#49b6ff';
 // at the centre.
 const CENTER_LIGHTEN = 0.66;
 
-// ---- autonomous wander (fixed, never sensor-exposed) ----
-const MOVE_BASE_PX = 1.9;    // fixed px/frame wander speed
-const NOISE_BASE   = 0.006;  // fixed wander-clock advance per frame
+// ---- autonomous wander (idle shake scales speed only) ----
+const MOVE_BASE_PX = 1.9;    // baseline px/frame wander speed
+const NOISE_BASE   = 0.006;  // baseline wander-clock advance per frame
+const WANDER_SPEED_MAX = 3; // multiplier at full idle shake energy
+const WANDER_SPEED_EASE = 6; // speed smoothing rate per second
 // vx = noise(seed+off0) - noise(seed+off1), vy likewise -- a difference of two
 // noise samples is zero-mean whatever noise()'s own mean is, so no net drift.
 const WANDER_NOISE_OFFSETS = [0, 2113, 4229, 6337];
@@ -86,9 +90,9 @@ const ATTRACTION_WEAKEN_RATE  = (ATTRACTION_IDLE - ATTRACTION_MIN) / ATTRACTION_
 const ATTRACTION_RECOVER_RATE = (ATTRACTION_IDLE - ATTRACTION_MIN) / ATTRACTION_RECOVER_SECONDS;
 
 // ---- shake sensing (feeds the shape screen, and "is shaking happening now?") ----
-const SHAKE_GAIN     = 0.05;  // accel-delta magnitude -> energy (per motion event) -- shape screen only
+const SHAKE_GAIN     = 0.05;  // accel-delta magnitude -> shape / idle speed energy
 const SHAKE_DEADZONE = 0.7;   // ignore resting hand jitter (delta below this)
-const SHAKE_DECAY    = 2.0;   // shape-screen energy bled off per second
+const SHAKE_DECAY    = 2.0;   // shake energy bled off per second
 const SHAKE_FULL     = 4.0;   // energy that maps to full shape spikiness
 const SHAKE_ACTIVE_WINDOW_MS = 300; // a qualifying jolt within this long ago counts as "still shaking"
 
@@ -104,6 +108,7 @@ let baseColor;
 let centerColor;
 let WHITE;
 let noiseAccum = 0;
+let wanderSpeed = 1;
 let shapeLevel = 0; // smoothed 0..1, shape screen only
 
 let shakeEnergy = 0;
@@ -169,6 +174,9 @@ function wireUI() {
 
   document.getElementById('save-btn').addEventListener('click', () => {
     appState = 'canvas';
+    shakeEnergy = 0; // shaping motion must not carry into idle movement
+    lastShakeAt = -Infinity;
+    wanderSpeed = 1;
     document.body.classList.remove('state-shape');
     document.body.classList.add('state-canvas');
     initBoids();
@@ -185,6 +193,8 @@ function wireUI() {
   const press = (e) => {
     e.preventDefault();
     signalEl.setPointerCapture(e.pointerId);
+    shakeEnergy = 0;
+    lastShakeAt = -Infinity; // idle shaking must not weaken SIGNAL attraction
     liveAttraction = attraction; // continue from wherever the resting value currently sits
     signaling = true;
     signalEl.classList.add('on');
@@ -217,6 +227,10 @@ function wireUI() {
   document.getElementById('reset-btn').addEventListener('click', () => {
     initBoids();
     attraction = ATTRACTION_IDLE;
+    liveAttraction = ATTRACTION_IDLE;
+    shakeEnergy = 0;
+    lastShakeAt = -Infinity;
+    wanderSpeed = 1;
   });
 
   // iOS 13+ gates devicemotion behind an explicit permission call that WebKit
@@ -356,7 +370,10 @@ function drawShapeScreen(dt) {
 function drawCanvasScreen(dt) {
   if (!boids.length) initBoids();
 
-  noiseAccum += NOISE_BASE; // fixed autonomous wander speed -- never sensor-driven
+  const speedTarget = signaling ? 1
+    : lerp(1, WANDER_SPEED_MAX, constrain(shakeEnergy / SHAKE_FULL, 0, 1));
+  wanderSpeed += (speedTarget - wanderSpeed) * (1 - Math.exp(-WANDER_SPEED_EASE * dt));
+  noiseAccum += NOISE_BASE * wanderSpeed;
 
   const shaking = millis() - lastShakeAt < SHAKE_ACTIVE_WINDOW_MS;
 
@@ -377,7 +394,7 @@ function drawCanvasScreen(dt) {
 
   background(7, 7, 11);
 
-  for (const b of boids) b.wander(noiseAccum);
+  for (const b of boids) b.wander(noiseAccum, wanderSpeed);
   for (const b of boids) b.applyAttraction(boids, currentAttraction);
   for (const b of boids) b.update();
   resolveSeparation(boids);
@@ -455,7 +472,7 @@ class Boid {
   // AUTONOMOUS -- velocity is the difference of two Perlin channels per axis
   // (this boid's own seed + the shared wander clock), plus a soft steer away
   // from the canvas edges. No reference to any other boid.
-  wander(nz) {
+  wander(nz, speed = 1) {
     const [o0, o1, o2, o3] = WANDER_NOISE_OFFSETS;
     let vx = noise(this.noiseSeed + o0, nz) - noise(this.noiseSeed + o1, nz);
     let vy = noise(this.noiseSeed + o2, nz) - noise(this.noiseSeed + o3, nz);
@@ -467,7 +484,7 @@ class Boid {
     if (this.pos.y > height - m) vy -= EDGE_STEER * (1 - (height - this.pos.y) / m);
 
     this.autoVel.set(vx, vy);
-    if (this.autoVel.magSq() > 1e-6) this.autoVel.setMag(MOVE_BASE_PX);
+    if (this.autoVel.magSq() > 1e-6) this.autoVel.setMag(MOVE_BASE_PX * speed);
   }
 
   // PARAM 1 -- pull toward every other boid within reach, scaled by the live
