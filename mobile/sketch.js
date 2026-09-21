@@ -148,7 +148,19 @@ function wireUI() {
   });
 
   signalEl = document.getElementById('signal');
-  const press = (e) => { e.preventDefault(); signaling = true; signalEl.classList.add('on'); };
+  // Pointer capture is essential here: while the user shakes the phone with
+  // their thumb still on SIGNAL, the touch point can easily drift outside
+  // the button's small hit area for a moment. Without capture that fires
+  // pointerleave and releases (bakes in) almost instantly, before any real
+  // shake has accumulated -- SIGNAL would appear to "do nothing". Capture
+  // keeps the button receiving events for this pointer regardless of where
+  // it physically wanders until a real pointerup/cancel ends the gesture.
+  const press = (e) => {
+    e.preventDefault();
+    signalEl.setPointerCapture(e.pointerId);
+    signaling = true;
+    signalEl.classList.add('on');
+  };
   const release = () => {
     if (signaling) {
       attraction = liveAttraction;
@@ -161,7 +173,7 @@ function wireUI() {
   signalEl.addEventListener('pointerdown', press);
   signalEl.addEventListener('pointerup', release);
   signalEl.addEventListener('pointercancel', release);
-  signalEl.addEventListener('pointerleave', release);
+  signalEl.addEventListener('lostpointercapture', release);
 
   const tab = document.getElementById('panel-tab');
   tab.addEventListener('click', () => document.body.classList.toggle('panel-open'));
