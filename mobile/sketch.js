@@ -93,7 +93,7 @@ const SHAKE_FULL     = 4.0;   // energy that maps to full shape spikiness
 const SHAKE_ACTIVE_WINDOW_MS = 300; // a qualifying jolt within this long ago counts as "still shaking"
 
 // ---- live params ----
-let blobSize = 42;
+let blobSize = 24;
 let attraction = ATTRACTION_IDLE;
 let chosenShapeSpec = { numSpikes: 0, spikeAmp: 0 };
 
