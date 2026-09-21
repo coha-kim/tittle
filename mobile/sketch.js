@@ -56,12 +56,24 @@ const SHAPE_SPIKE_SHARPNESS = 3.5; // higher = narrower, more pointed spikes
 const SHAPE_LEVEL_EASE    = 6;    // preview smoothing rate (per second)
 
 // ---- mutual attraction between boids (SIGNAL + hold-duration shake) ----
-const ATTRACTION_IDLE    = 1.2;   // resting attraction -- gentle clustering
-const ATTRACTION_MIN     = 0.05;  // weakest attraction sustained shaking can dial down to
-const ATTRACT_FACTOR     = 3.4;   // reach = ATTRACT_FACTOR * blobSize
-const ATTRACT_GAIN       = 0.55;  // px/frame at contact, per unit of attraction
-const ATTRACT_CORE_FACTOR = 0.95; // anti-collapse core radius = this * blobSize, always on
-const ATTRACT_CORE_GAIN   = 1.6;  // px/frame max core repel at full overlap
+const ATTRACTION_IDLE    = 0.45;  // resting attraction -- a light, organic drift together, not a snap-to-cluster pull
+const ATTRACTION_MIN     = 0.02;  // weakest attraction sustained shaking can dial down to
+const ATTRACT_FACTOR     = 3.2;   // reach = ATTRACT_FACTOR * blobSize -- local, not a whole-screen pull
+const ATTRACT_GAIN       = 0.35;  // px/frame at contact, per unit of attraction
+// Core is wide enough that even at max breathing-pulse size (see PULSE_AMP)
+// boids' edges stay clear of touching -- at rest they drift loosely near
+// each other (like the display app's boids) but never visually fuse.
+const ATTRACT_CORE_FACTOR = 2.6;  // anti-collapse core radius = this * blobSize, always on
+const ATTRACT_CORE_GAIN   = 2.4;  // px/frame max core repel at full overlap
+// A soft force alone isn't a guarantee -- two boids wandering toward each
+// other can close faster than ATTRACT_CORE_GAIN can push back, so they'd
+// still visually fuse for a moment. This is a HARD floor enforced as a
+// direct position correction after movement, the same technique the display
+// app uses (resolveCrossPopulationSeparation) -- it's what actually
+// guarantees boids never overlap, with the soft core above just there to
+// make the approach feel like a cushion rather than a hard bounce.
+const SEPARATION_FACTOR = 2.3;    // hard-floor spacing = this * blobSize
+const SEPARATION_ITERS  = 2;      // relaxation passes per frame
 // Duration, not strength: continuous shaking while SIGNAL is held drains
 // attraction at a flat per-second rate, however hard or soft each shake is --
 // only WHETHER shaking is ongoing matters (see SHAKE_ACTIVE_WINDOW_MS below).
@@ -368,10 +380,39 @@ function drawCanvasScreen(dt) {
   for (const b of boids) b.wander(noiseAccum);
   for (const b of boids) b.applyAttraction(boids, currentAttraction);
   for (const b of boids) b.update();
+  resolveSeparation(boids);
 
   noStroke();
   for (const b of boids) b.renderGlow();
   for (const b of boids) b.renderOrb();
+}
+
+// HARD floor on boid spacing -- the actual guarantee that boids never
+// visually fuse, regardless of how fast wander + attraction move them
+// toward each other in a single frame. Runs after update(), so it also
+// re-clamps to canvas.
+function resolveSeparation(all) {
+  const minSep = SEPARATION_FACTOR * blobSize;
+  for (let it = 0; it < SEPARATION_ITERS; it++) {
+    for (let i = 0; i < all.length; i++) {
+      for (let j = i + 1; j < all.length; j++) {
+        const a = all[i], b = all[j];
+        let dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+        let d = Math.hypot(dx, dy);
+        if (d >= minSep) continue;
+        if (d < 1e-4) { dx = 1; dy = 0; d = 1e-4; }
+        const push = (minSep - d) / 2;
+        const ux = dx / d, uy = dy / d;
+        a.pos.x -= ux * push; a.pos.y -= uy * push;
+        b.pos.x += ux * push; b.pos.y += uy * push;
+      }
+    }
+  }
+  const r = blobSize;
+  for (const o of all) {
+    o.pos.x = constrain(o.pos.x, r, width - r);
+    o.pos.y = constrain(o.pos.y, r, height - r);
+  }
 }
 
 // ---- shared shape drawing (shape-screen preview + every boid) ----
