@@ -64,10 +64,11 @@ test('idle sensor shake boosts wander step and clock, then settles without alter
 
 test('wander multiplier leaves pair attraction and core repulsion unchanged at identical positions', () => {
   const h = harness();
-  for (const distance of [120, 60]) {
+  for (const distance of [h.run('blobSize * 2.9'), h.run('blobSize * 1.5')]) {
     h.run(`boids[1].pos.x = boids[0].pos.x + ${distance};
       boids[0].wander(0, 1); boids[0].applyAttraction(boids, attraction);`);
     const force = h.run('JSON.stringify(boids[0].attractForce)');
+    assert.notEqual(h.run('boids[0].attractForce.x'), 0);
     h.run('boids[0].wander(0, 3); boids[0].applyAttraction(boids, attraction)');
     assert.equal(h.run('JSON.stringify(boids[0].attractForce)'), force);
   }
