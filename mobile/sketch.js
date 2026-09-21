@@ -87,9 +87,12 @@ let liveAttraction = ATTRACTION_IDLE;
 let lastMs = 0;
 let lastAccel = null;
 let motionSeen = false;
+let motionStatus = 'needs-permission'; // needs-permission | requesting | granted | denied | unsupported
 
 let signalEl;
 let shapeHintEl;
+let motionBtnEl;
+let motionStatusEl;
 let dragLast = null;
 
 function setup() {
@@ -176,28 +179,68 @@ function wireUI() {
     attraction = ATTRACTION_IDLE;
   });
 
-  // iOS 13+ gates devicemotion behind an explicit permission call that must
-  // run inside a user gesture -- the first tap anywhere kicks it off, with no
-  // separate loading screen in the way.
-  window.addEventListener('pointerdown', startMotion, { once: true });
+  // iOS 13+ gates devicemotion behind an explicit permission call that WebKit
+  // only reliably honours (shows the OS prompt) when invoked directly inside
+  // a real `click` handler on a button -- a generic `pointerdown` on window
+  // is not trusted the same way and silently no-ops. So this is a dedicated
+  // button tap, not a passive first-touch listener.
+  motionBtnEl = document.getElementById('motion-btn');
+  motionStatusEl = document.getElementById('motion-status');
+  const DME = window.DeviceMotionEvent;
+  if (DME && typeof DME.requestPermission === 'function') {
+    motionStatus = 'needs-permission';
+    motionBtnEl.addEventListener('click', startMotion);
+  } else if (DME) {
+    // no permission gate on this browser (e.g. Android) -- attach right away
+    motionStatus = 'granted';
+    window.addEventListener('devicemotion', onMotion);
+  } else {
+    motionStatus = 'unsupported';
+  }
+  updateMotionUI();
 }
 
 // ---- motion sensor (drives shape spikes / speed / live attraction, depending on screen+mode) ----
 function startMotion() {
   const DME = window.DeviceMotionEvent;
-  if (DME && typeof DME.requestPermission === 'function') {
-    DME.requestPermission()
-      .then((state) => { if (state === 'granted') window.addEventListener('devicemotion', onMotion); })
-      .catch(() => {});
-  } else if (DME) {
-    window.addEventListener('devicemotion', onMotion);
+  motionStatus = 'requesting';
+  updateMotionUI();
+  DME.requestPermission()
+    .then((state) => {
+      if (state === 'granted') {
+        motionStatus = 'granted';
+        window.addEventListener('devicemotion', onMotion);
+      } else {
+        motionStatus = 'denied';
+      }
+      updateMotionUI();
+    })
+    .catch(() => { motionStatus = 'denied'; updateMotionUI(); });
+}
+
+// Reflects motionStatus (+ whether any devicemotion event has actually
+// arrived yet) into the shape screen's status line and shows/hides the
+// permission button -- this is the only window we get into what's actually
+// happening with the sensor on a real phone, so keep it visible always.
+function updateMotionUI() {
+  if (motionBtnEl) {
+    motionBtnEl.style.display = (motionStatus === 'needs-permission' || motionStatus === 'requesting') ? 'inline-flex' : 'none';
   }
+  if (!motionStatusEl) return;
+  const label = {
+    'needs-permission': 'tap "enable motion" below, then shake',
+    requesting: 'requesting motion access…',
+    granted: motionSeen ? 'motion: live' : 'motion allowed -- shake now',
+    denied: 'motion denied -- Settings > Safari > Motion & Orientation Access, then reload. dragging works meanwhile.',
+    unsupported: 'no motion sensor on this browser -- drag to shake instead',
+  }[motionStatus] || '';
+  motionStatusEl.textContent = label;
 }
 
 function onMotion(e) {
   const a = e.accelerationIncludingGravity || e.acceleration;
   if (!a) return;
-  motionSeen = true;
+  if (!motionSeen) { motionSeen = true; updateMotionUI(); }
   if (lastAccel) {
     const dx = (a.x || 0) - lastAccel.x;
     const dy = (a.y || 0) - lastAccel.y;
