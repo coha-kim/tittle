@@ -1,29 +1,24 @@
-// orbmerge-mobile -- one flock of layered "orb" boids, sized for a phone screen.
+// orbmerge-mobile -- shape your population, then set it loose.
 //
-// Ported from ../orbmerge with the multi-population metaball MERGE removed:
-// here there is a SINGLE flock and boids DO NOT fuse when they overlap -- each
-// boid is always a crisp layered bullseye that simply passes over its
-// neighbours. Two control channels, both physical:
+// Two screens, one shared devicemotion channel reused per screen:
 //
-//   PARAM 1 -- repulsion between boids -- the neumorphic PUSH pad, bottom-left.
-//     Each tap adds an impulse to `repulsion`, which bleeds back toward 0 every
-//     frame. At rest the boids drift through each other freely; mash the pad
-//     and they shove apart; stop and they drift back together. Holding the
-//     flock open is an ongoing gesture, not a set-and-forget slider. The ring
-//     under the pad shows the current `repulsion` level.
+//   SHAPE screen -- a single preview blob. Shake energy drives both the
+//     spike COUNT and spike SHARPNESS of a polygon, from a smooth circle at
+//     rest up toward a many-pointed spiky shape under a hard shake. Whatever
+//     shape is live when SAVE is tapped becomes the population's shape --
+//     every boid on the canvas screen renders with it (own rotation only).
 //
-//   PARAM 2 -- speed -- the phone's motion sensor.
-//     `devicemotion` acceleration deltas feed a decaying `shakeEnergy`, which
-//     maps to a global speed multiplier on the wander walk: a gentle tilt is a
-//     slow drift, a hard shake is frantic. iOS only hands over the sensor
-//     after a user gesture (the start overlay) and only over https; where no
-//     sensor reports in, dragging on the canvas stands in for a shake.
+//   CANVAS screen -- the flock, each boid rendered in the chosen shape.
+//     Boids have a constant idle mutual ATTRACTION (gentle clustering) plus a
+//     small always-on anti-collapse core so they never fully overlap.
+//     Holding SIGNAL redirects the shake channel (which otherwise drives
+//     wander speed) into a LIVE PREVIEW of that attraction: shake harder and
+//     it weakens in real time. Releasing SIGNAL bakes whatever value was live
+//     at that instant in as the new resting attraction.
 //
-//   Side panel (right edge, collapsible): base colour + blob size.
-//
-// AUTONOMOUS vs LIVE, same split as the original: wander() is a fixed per-boid
-// Perlin walk that never reads a sensor; repulsion / speed / size / colour are
-// the live channels.
+// AUTONOMOUS vs LIVE, same split as the original: wander() is a fixed
+// per-boid Perlin walk that never reads a sensor; shape, attraction, speed,
+// size and colour are the live channels.
 
 // ---- fixed config ----
 const NUM_BOIDS  = 35;
@@ -46,41 +41,55 @@ const EDGE_STEER  = 2.8;
 const PULSE_AMP  = 0.05;
 const PULSE_RATE = 0.9;
 
-// ---- PARAM 1: intra-flock repulsion (the PUSH pad) ----
-const REPEL_FACTOR  = 2.8;   // reach = REPEL_FACTOR * blobSize
-const REPEL_GAIN    = 0.7;   // px/frame at contact, per unit of `repulsion`
-const REPEL_MAX     = 5;     // ceiling on `repulsion`
-const REPEL_PER_TAP = 1.5;   // added to `repulsion` per press
-const REPEL_DECAY   = 2.2;   // units/second bled off toward 0
+// ---- shape screen: shake -> spike count + sharpness ----
+const SHAPE_SEGMENTS      = 64;   // vertices traced per blob outline
+const SHAPE_MAX_SPIKES    = 10;   // spike count at full shake
+const SHAPE_MAX_AMP       = 0.55; // spike height as a fraction of base radius, at full shake
+const SHAPE_SPIKE_SHARPNESS = 3.5; // higher = narrower, more pointed spikes
+const SHAPE_LEVEL_EASE    = 6;    // preview smoothing rate (per second)
 
-// ---- PARAM 2: speed from motion ----
+// ---- PARAM 1: mutual attraction between boids ----
+const ATTRACTION_IDLE    = 1.2;   // resting attraction -- gentle clustering
+const ATTRACTION_MIN     = 0.05;  // weakest attraction a full shake can dial down to
+const ATTRACT_FACTOR     = 3.4;   // reach = ATTRACT_FACTOR * blobSize
+const ATTRACT_GAIN       = 0.55;  // px/frame at contact, per unit of attraction
+const ATTRACT_CORE_FACTOR = 0.95; // anti-collapse core radius = this * blobSize, always on
+const ATTRACT_CORE_GAIN   = 1.6;  // px/frame max core repel at full overlap
+
+// ---- PARAM 2: speed from motion (only live when SIGNAL isn't held) ----
 const SPEED_MIN      = 0.5;   // resting drift (never fully still)
 const SPEED_MAX      = 3.0;   // full-shake frenzy
 const SHAKE_GAIN     = 0.05;  // accel-delta magnitude -> energy (per motion event)
 const SHAKE_DEADZONE = 0.7;   // ignore resting hand jitter (delta below this)
 const SHAKE_DECAY    = 2.0;   // energy bled off per second
-const SHAKE_FULL     = 4.0;   // energy that maps to SPEED_MAX
+const SHAKE_FULL     = 4.0;   // energy that maps to SPEED_MAX / full shape spikiness / min attraction
 const SPEED_EASE     = 5;     // speedMul approach rate (per second)
 
 // ---- live params ----
 let blobSize = 42;
+let attraction = ATTRACTION_IDLE;
+let chosenShapeSpec = { numSpikes: 0, spikeAmp: 0 };
 
 // ---- state ----
+let appState = 'shape'; // 'shape' | 'canvas'
 let boids = [];
 let baseColor;
 let centerColor;
 let WHITE;
 let noiseAccum = 0;
+let shapeLevel = 0; // smoothed 0..1, shape screen only
 
-let repulsion   = 0;
 let shakeEnergy = 0;
 let speedMul    = SPEED_MIN;
+let signaling   = false;
+let liveAttraction = ATTRACTION_IDLE;
 
 let lastMs = 0;
 let lastAccel = null;
 let motionSeen = false;
 
-let pulseEl;
+let signalEl;
+let shapeHintEl;
 let dragLast = null;
 
 function setup() {
@@ -91,9 +100,8 @@ function setup() {
   setBaseColor(SEED_COLOR);
   wireUI();
   lastMs = millis();
-  // boids are spawned on the first draw() frame, by which point the canvas is
-  // guaranteed to be at its real viewport size (some mobile browsers finish
-  // layout a beat after setup()).
+  // boids are spawned the first time we enter the canvas screen, by which
+  // point the canvas is guaranteed to be at its real viewport size.
 }
 
 // Keep the canvas locked to the viewport. Boid positions are rescaled with it
@@ -118,7 +126,7 @@ function initBoids() {
 }
 
 // picker hex -> base p5.Color (rim) + lightened-toward-white (centre), and the
-// --accent CSS var the PUSH ring + slider thumb pick up.
+// --accent CSS var the SIGNAL ring + slider thumb pick up.
 function setBaseColor(hex) {
   baseColor = color(hex);
   centerColor = lerpColor(baseColor, WHITE, CENTER_LIGHTEN);
@@ -127,13 +135,30 @@ function setBaseColor(hex) {
 
 // ---- UI wiring ----
 function wireUI() {
-  pulseEl = document.getElementById('pulse');
-  const press = (e) => { e.preventDefault(); onPush(); pulseEl.classList.add('on'); };
-  const release = () => pulseEl.classList.remove('on');
-  pulseEl.addEventListener('pointerdown', press);
-  pulseEl.addEventListener('pointerup', release);
-  pulseEl.addEventListener('pointercancel', release);
-  pulseEl.addEventListener('pointerleave', release);
+  shapeHintEl = document.getElementById('shape-hint');
+
+  document.getElementById('save-btn').addEventListener('click', () => {
+    appState = 'canvas';
+    document.body.classList.remove('state-shape');
+    document.body.classList.add('state-canvas');
+    initBoids();
+  });
+
+  signalEl = document.getElementById('signal');
+  const press = (e) => { e.preventDefault(); signaling = true; signalEl.classList.add('on'); };
+  const release = () => {
+    if (signaling) {
+      attraction = liveAttraction;
+      shakeEnergy = 0;
+    }
+    signaling = false;
+    signalEl.classList.remove('on');
+    signalEl.style.setProperty('--level', 0);
+  };
+  signalEl.addEventListener('pointerdown', press);
+  signalEl.addEventListener('pointerup', release);
+  signalEl.addEventListener('pointercancel', release);
+  signalEl.addEventListener('pointerleave', release);
 
   const tab = document.getElementById('panel-tab');
   tab.addEventListener('click', () => document.body.classList.toggle('panel-open'));
@@ -148,25 +173,16 @@ function wireUI() {
 
   document.getElementById('reset-btn').addEventListener('click', () => {
     initBoids();
-    repulsion = 0;
+    attraction = ATTRACTION_IDLE;
   });
 
-  const overlay = document.getElementById('start-overlay');
-  overlay.addEventListener('click', () => {
-    startMotion();
-    overlay.classList.add('hidden');
-  });
+  // iOS 13+ gates devicemotion behind an explicit permission call that must
+  // run inside a user gesture -- the first tap anywhere kicks it off, with no
+  // separate loading screen in the way.
+  window.addEventListener('pointerdown', startMotion, { once: true });
 }
 
-function onPush() {
-  repulsion = Math.min(REPEL_MAX, repulsion + REPEL_PER_TAP);
-  if (navigator.vibrate) navigator.vibrate(8);
-}
-
-// ---- motion sensor (PARAM 2) ----
-// iOS 13+ gates devicemotion behind an explicit permission call that must run
-// inside a user gesture -- hence the start overlay. Elsewhere the listener just
-// attaches.
+// ---- motion sensor (drives shape spikes / speed / live attraction, depending on screen+mode) ----
 function startMotion() {
   const DME = window.DeviceMotionEvent;
   if (DME && typeof DME.requestPermission === 'function') {
@@ -213,45 +229,105 @@ function draw() {
   // catch a resize event p5 may have missed (e.g. tab shown after load)
   if (width !== windowWidth || height !== windowHeight) windowResized();
 
-  if (!boids.length) initBoids();
-
   const now = millis();
   let dt = (now - lastMs) / 1000;
   lastMs = now;
   dt = Math.min(dt, 0.05);
 
-  // both live impulses bleed back toward rest every frame
-  repulsion   = Math.max(0, repulsion - REPEL_DECAY * dt);
+  // shake energy always bleeds back toward rest, on either screen
   shakeEnergy = Math.max(0, shakeEnergy - SHAKE_DECAY * dt);
 
-  const target = lerp(SPEED_MIN, SPEED_MAX, constrain(shakeEnergy / SHAKE_FULL, 0, 1));
-  speedMul += (target - speedMul) * Math.min(1, dt * SPEED_EASE);
+  if (appState === 'shape') {
+    drawShapeScreen(dt);
+    return;
+  }
 
+  drawCanvasScreen(dt);
+}
+
+function drawShapeScreen(dt) {
+  background(7, 7, 11);
+
+  const target = constrain(shakeEnergy / SHAKE_FULL, 0, 1);
+  shapeLevel += (target - shapeLevel) * Math.min(1, dt * SHAPE_LEVEL_EASE);
+
+  const numSpikes = Math.round(lerp(0, SHAPE_MAX_SPIKES, shapeLevel));
+  const spikeAmp = lerp(0, SHAPE_MAX_AMP, shapeLevel);
+  chosenShapeSpec = { numSpikes, spikeAmp };
+
+  const cx = width / 2, cy = height / 2;
+  const R = Math.min(width, height) * 0.30;
+  const ctx = drawingContext;
+  pathForBlob(ctx, cx, cy, R, numSpikes, spikeAmp, frameCount * 0.002);
+  fillGradientBlob(ctx, cx, cy, R, spikeAmp, centerColor, baseColor);
+
+  if (frameCount % 6 === 0 && shapeHintEl) {
+    shapeHintEl.textContent = numSpikes === 0 ? 'smooth circle' : numSpikes + ' spikes';
+  }
+}
+
+function drawCanvasScreen(dt) {
+  if (!boids.length) initBoids();
+
+  if (!signaling) {
+    const target = lerp(SPEED_MIN, SPEED_MAX, constrain(shakeEnergy / SHAKE_FULL, 0, 1));
+    speedMul += (target - speedMul) * Math.min(1, dt * SPEED_EASE);
+  }
   noiseAccum += NOISE_BASE * speedMul;
+
+  if (signaling) {
+    const shakeLevel = constrain(shakeEnergy / SHAKE_FULL, 0, 1);
+    liveAttraction = lerp(ATTRACTION_IDLE, ATTRACTION_MIN, shakeLevel);
+    signalEl.style.setProperty('--level', shakeLevel.toFixed(3));
+  }
+  const currentAttraction = signaling ? liveAttraction : attraction;
 
   background(7, 7, 11);
 
   for (const b of boids) b.wander(noiseAccum);
-  for (const b of boids) b.applyRepulsion(boids);
+  for (const b of boids) b.applyAttraction(boids, currentAttraction);
   for (const b of boids) b.update();
 
   noStroke();
   for (const b of boids) b.renderGlow();
   for (const b of boids) b.renderOrb();
+}
 
-  if (frameCount % 4 === 0) {
-    pulseEl.style.setProperty('--level', constrain(repulsion / REPEL_MAX, 0, 1).toFixed(3));
+// ---- shared shape drawing (shape-screen preview + every boid) ----
+function pathForBlob(ctx, cx, cy, baseRadius, numSpikes, spikeAmp, rotation) {
+  ctx.beginPath();
+  for (let i = 0; i <= SHAPE_SEGMENTS; i++) {
+    const theta = (i / SHAPE_SEGMENTS) * TWO_PI + rotation;
+    const bump = (spikeAmp > 0 && numSpikes > 0)
+      ? Math.pow(Math.max(0, Math.cos(numSpikes * theta)), SHAPE_SPIKE_SHARPNESS)
+      : 0;
+    const r = baseRadius * (1 + spikeAmp * bump);
+    const x = cx + Math.cos(theta) * r;
+    const y = cy + Math.sin(theta) * r;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
+  ctx.closePath();
+}
+
+function fillGradientBlob(ctx, cx, cy, baseRadius, spikeAmp, centerCol, rimCol) {
+  const outer = baseRadius * (1 + spikeAmp);
+  const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, outer);
+  grad.addColorStop(0, `rgb(${red(centerCol)}, ${green(centerCol)}, ${blue(centerCol)})`);
+  grad.addColorStop(1, `rgb(${red(rimCol)}, ${green(rimCol)}, ${blue(rimCol)})`);
+  ctx.fillStyle = grad;
+  ctx.fill();
 }
 
 class Boid {
   constructor(x, y) {
     this.pos = createVector(x, y);
     this.autoVel = createVector(0, 0);
-    this.repelForce = createVector(0, 0);
-    // per-individual seeds so paths and breathing never fall into sync.
+    this.attractForce = createVector(0, 0);
+    // per-individual seeds so paths, breathing and spike facing never fall
+    // into sync.
     this.noiseSeed = random(1000);
     this.pulsePhase = random(1000);
+    this.rotationOffset = random(TWO_PI);
   }
 
   // AUTONOMOUS -- velocity is the difference of two Perlin channels per axis
@@ -272,27 +348,37 @@ class Boid {
     if (this.autoVel.magSq() > 1e-6) this.autoVel.setMag(MOVE_BASE_PX * speedMul);
   }
 
-  // PARAM 1 -- push away from every other boid within reach, scaled by the live
-  // `repulsion` level. Zero when the pad hasn't been tapped recently.
-  applyRepulsion(all) {
-    this.repelForce.set(0, 0);
-    if (repulsion <= 0) return;
-    const reach = blobSize * REPEL_FACTOR;
+  // PARAM 1 -- pull toward every other boid within reach, scaled by the live
+  // `attraction` level, plus a small always-on anti-collapse core so boids
+  // never fully overlap however strong the attraction.
+  applyAttraction(all, currentAttraction) {
+    this.attractForce.set(0, 0);
+    const reach = blobSize * ATTRACT_FACTOR;
+    const core = blobSize * ATTRACT_CORE_FACTOR;
     for (const other of all) {
       if (other === this) continue;
-      const dx = this.pos.x - other.pos.x;
-      const dy = this.pos.y - other.pos.y;
+      const dx = other.pos.x - this.pos.x;
+      const dy = other.pos.y - this.pos.y;
       const d = Math.hypot(dx, dy);
-      if (d >= reach || d < 1e-4) continue;
-      const push = repulsion * REPEL_GAIN * (1 - d / reach);
-      this.repelForce.x += (dx / d) * push;
-      this.repelForce.y += (dy / d) * push;
+      if (d < 1e-4) continue;
+      const ux = dx / d, uy = dy / d;
+
+      if (currentAttraction > 0 && d < reach) {
+        const pull = currentAttraction * ATTRACT_GAIN * (1 - d / reach);
+        this.attractForce.x += ux * pull;
+        this.attractForce.y += uy * pull;
+      }
+      if (d < core) {
+        const push = ATTRACT_CORE_GAIN * (1 - d / core);
+        this.attractForce.x -= ux * push;
+        this.attractForce.y -= uy * push;
+      }
     }
   }
 
   update() {
-    this.pos.x += this.autoVel.x + this.repelForce.x;
-    this.pos.y += this.autoVel.y + this.repelForce.y;
+    this.pos.x += this.autoVel.x + this.attractForce.x;
+    this.pos.y += this.autoVel.y + this.attractForce.y;
     const r = blobSize;
     this.pos.x = constrain(this.pos.x, r, width - r);
     this.pos.y = constrain(this.pos.y, r, height - r);
@@ -311,17 +397,13 @@ class Boid {
     circle(this.pos.x, this.pos.y, outer * 2.8);
   }
 
-  // one disc, filled with a smooth radial gradient from the centre (lightened)
-  // out to the rim (base colour) -- a continuous falloff, no banded rings.
+  // the population's chosen shape, filled with a smooth radial gradient from
+  // the centre (lightened) out to the rim (base colour).
   renderOrb() {
     const outer = this._outerRadius();
     const ctx = drawingContext;
-    const grad = ctx.createRadialGradient(this.pos.x, this.pos.y, 0, this.pos.x, this.pos.y, outer);
-    grad.addColorStop(0, `rgb(${red(centerColor)}, ${green(centerColor)}, ${blue(centerColor)})`);
-    grad.addColorStop(1, `rgb(${red(baseColor)}, ${green(baseColor)}, ${blue(baseColor)})`);
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(this.pos.x, this.pos.y, outer, 0, TWO_PI);
-    ctx.fill();
+    pathForBlob(ctx, this.pos.x, this.pos.y, outer,
+      chosenShapeSpec.numSpikes, chosenShapeSpec.spikeAmp, this.rotationOffset);
+    fillGradientBlob(ctx, this.pos.x, this.pos.y, outer, chosenShapeSpec.spikeAmp, centerColor, baseColor);
   }
 }

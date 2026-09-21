@@ -39,29 +39,84 @@
       display: block;
     }
 
-    /* ---- PARAM 1: neumorphic PUSH pad, bottom-left ---- */
-    #pulse {
+    /* ---- SHAPE screen: instructions + hint + save, hidden on canvas screen ---- */
+    #shape-ui {
       position: fixed;
-      left: calc(env(safe-area-inset-left, 0px) + 20px);
-      bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
-      width: 88px;
-      height: 88px;
+      inset: 0;
+      z-index: 10;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: calc(env(safe-area-inset-top, 0px) + 34px) 24px
+               calc(env(safe-area-inset-bottom, 0px) + 40px);
+      pointer-events: none;
+    }
+
+    body.state-shape #shape-ui {
+      display: flex;
+    }
+
+    #shape-instructions {
+      text-align: center;
+      font-size: 13px;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      color: #8b93a1;
+      line-height: 1.7;
+    }
+
+    #shape-hint {
+      font-size: 12px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: #5b6270;
+    }
+
+    #save-btn {
+      pointer-events: auto;
+      appearance: none;
+      -webkit-appearance: none;
+      border: none;
+      border-radius: 16px;
+      background: var(--accent, #49b6ff);
+      color: #07070b;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      font-size: 14px;
+      padding: 18px 52px;
+      cursor: pointer;
+      transition: transform .09s ease;
+    }
+
+    #save-btn:active {
+      transform: scale(.95);
+    }
+
+    /* ---- CANVAS screen: SIGNAL pad, bottom-centre, hidden on shape screen ---- */
+    #signal {
+      position: fixed;
+      left: 50%;
+      bottom: calc(env(safe-area-inset-bottom, 0px) + 26px);
+      transform: translateX(-50%);
+      width: min(230px, 62vw);
+      height: 78px;
       margin: 0;
       padding: 0;
       border: none;
-      border-radius: 50%;
+      border-radius: 39px;
       z-index: 10;
+      display: none;
+      place-items: center;
       cursor: pointer;
       touch-action: none;
-      display: grid;
-      place-items: center;
       color: #aeb6c2;
-      font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      letter-spacing: .16em;
-      /* the ring under the pad is the live `repulsion` level (--level 0..1) */
+      font: 700 14px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      letter-spacing: .22em;
+      /* fill sweeps with live shake intensity (--level 0..1) while held */
       background:
-        radial-gradient(circle at 50% 50%, #15151b 0 55%, transparent 56%),
-        conic-gradient(var(--accent, #49b6ff) calc(var(--level, 0) * 360deg), rgba(255, 255, 255, .07) 0);
+        linear-gradient(90deg, var(--accent, #49b6ff) calc(var(--level, 0) * 100%), #15151b 0);
       box-shadow:
         7px 7px 18px rgba(0, 0, 0, .6),
         -6px -6px 16px rgba(255, 255, 255, .045),
@@ -69,14 +124,23 @@
       transition: transform .09s ease, box-shadow .09s ease;
     }
 
-    #pulse.on {
-      transform: scale(.93);
+    body.state-canvas #signal {
+      display: grid;
+    }
+
+    #signal.on {
+      transform: translateX(-50%) scale(.94);
       box-shadow:
         inset 6px 6px 14px rgba(0, 0, 0, .65),
         inset -4px -4px 10px rgba(255, 255, 255, .04);
     }
 
-    /* ---- collapsible side panel, right edge ---- */
+    /* ---- collapsible side panel, right edge (canvas screen only) ---- */
+    body:not(.state-canvas) #panel-tab,
+    body:not(.state-canvas) #panel {
+      display: none;
+    }
+
     #panel-tab {
       position: fixed;
       top: 50%;
@@ -220,48 +284,21 @@
     #reset-btn:active {
       background: rgba(255, 255, 255, .1);
     }
-
-    /* ---- start / motion-permission overlay ---- */
-    #start-overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 100;
-      background: #07070b;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 16px;
-      transition: opacity .4s ease;
-    }
-
-    #start-overlay.hidden {
-      opacity: 0;
-      pointer-events: none;
-    }
-
-    #start-overlay .big {
-      font-size: 21px;
-      letter-spacing: .22em;
-      text-transform: uppercase;
-      color: #dfe3ea;
-    }
-
-    #start-overlay .sub {
-      max-width: 280px;
-      text-align: center;
-      line-height: 1.6;
-      font-size: 13px;
-      letter-spacing: .04em;
-      color: #8b93a1;
-    }
   </style>
 </head>
 
-<body>
+<body class="state-shape">
   <main id="canvas-holder"></main>
 
-  <button id="pulse" type="button">PUSH</button>
+  <div id="shape-ui">
+    <div id="shape-instructions">shake to shape your population<br>circle &rarr; spikes</div>
+    <div style="display:flex; flex-direction:column; align-items:center; gap:16px;">
+      <div id="shape-hint">smooth circle</div>
+      <button id="save-btn" type="button">Save</button>
+    </div>
+  </div>
+
+  <button id="signal" type="button">SIGNAL</button>
 
   <div id="panel-tab" role="button" aria-label="toggle panel" tabindex="0"></div>
   <aside id="panel">
@@ -276,11 +313,6 @@
     </div>
     <button id="reset-btn" type="button">reset flock</button>
   </aside>
-
-  <div id="start-overlay">
-    <div class="big">orbmerge</div>
-    <div class="sub">tap to start · PUSH repels the flock · shake the phone to speed it up</div>
-  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/p5@2.3.1/lib/p5.min.js"></script>
   <script src="sketch.js"></script>
