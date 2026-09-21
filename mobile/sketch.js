@@ -30,7 +30,7 @@
 // idle shake controls its speed, while held SIGNAL controls attraction.
 
 // ---- fixed config ----
-const NUM_BOIDS  = 35;
+const NUM_BOIDS  = 10;
 const SEED_COLOR = '#49b6ff';
 
 // smooth radial gradient -- base colour on the rim, lightening toward white
@@ -97,7 +97,7 @@ const SHAKE_FULL     = 4.0;   // energy that maps to full shape spikiness
 const SHAKE_ACTIVE_WINDOW_MS = 300; // a qualifying jolt within this long ago counts as "still shaking"
 
 // ---- live params ----
-let blobSize = 42;
+let blobSize = 24;
 let attraction = ATTRACTION_IDLE;
 let chosenShapeSpec = { numSpikes: 0, spikeAmp: 0 };
 

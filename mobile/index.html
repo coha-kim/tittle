@@ -4,6 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport"
     content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <!-- Safari's own address/tab bar always eats into screen space during
+       normal tab browsing -- no page can draw behind that. These make the
+       page launch with zero browser chrome (true full screen) when added to
+       the home screen instead. -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Orbmerge — mobile</title>
   <style>
     * {
@@ -342,7 +349,7 @@
     </div>
     <div class="row">
       <label for="size-input">blob size</label>
-      <input id="size-input" type="range" min="18" max="90" step="1" value="42">
+      <input id="size-input" type="range" min="18" max="90" step="1" value="24">
     </div>
     <button id="reset-btn" type="button">reset flock</button>
   </aside>
