@@ -32,7 +32,7 @@
 // ---- fixed config ----
 const NUM_BOIDS  = 10;
 const SEED_COLOR = '#2A9284';
-const BACKGROUND_COLOR = '#2A9284';
+const BACKGROUND_COLOR = '#ECEADB';
 
 // smooth radial gradient -- base colour on the rim, lightening toward white
 // at the centre.
