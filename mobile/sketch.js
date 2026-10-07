@@ -344,12 +344,9 @@ function drawCanvasScreen(dt) {
   for (const b of boids) b.update();
   resolveSeparation(boids);
 
-  drawingContext.save();
-  drawingContext.globalAlpha = blobOpacity;
   noStroke();
   for (const b of boids) b.renderGlow();
   for (const b of boids) b.renderOrb();
-  drawingContext.restore();
 }
 
 // HARD floor on boid spacing -- the actual guarantee that boids never
@@ -396,11 +393,11 @@ function pathForBlob(ctx, cx, cy, baseRadius, numSpikes, spikeAmp, rotation) {
   ctx.closePath();
 }
 
-function fillGradientBlob(ctx, cx, cy, baseRadius, spikeAmp, centerCol, rimCol) {
+function fillGradientBlob(ctx, cx, cy, baseRadius, spikeAmp, centerCol, rimCol, opacity = 1) {
   const outer = baseRadius * (1 + spikeAmp);
   const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, outer);
-  grad.addColorStop(0, `rgb(${red(centerCol)}, ${green(centerCol)}, ${blue(centerCol)})`);
-  grad.addColorStop(1, `rgb(${red(rimCol)}, ${green(rimCol)}, ${blue(rimCol)})`);
+  grad.addColorStop(0, `rgba(${red(centerCol)}, ${green(centerCol)}, ${blue(centerCol)}, ${opacity})`);
+  grad.addColorStop(1, `rgba(${red(rimCol)}, ${green(rimCol)}, ${blue(rimCol)}, ${opacity})`);
   ctx.fillStyle = grad;
   ctx.fill();
 }
@@ -480,7 +477,7 @@ class Boid {
   // halo never dims another orb's core.
   renderGlow() {
     const outer = this._outerRadius();
-    fill(red(baseColor), green(baseColor), blue(baseColor), 18);
+    fill(red(baseColor), green(baseColor), blue(baseColor), 18 * blobOpacity);
     circle(this.pos.x, this.pos.y, outer * 2.8);
   }
 
@@ -491,6 +488,6 @@ class Boid {
     const ctx = drawingContext;
     pathForBlob(ctx, this.pos.x, this.pos.y, outer,
       chosenShapeSpec.numSpikes, chosenShapeSpec.spikeAmp, this.rotationOffset);
-    fillGradientBlob(ctx, this.pos.x, this.pos.y, outer, chosenShapeSpec.spikeAmp, centerColor, baseColor);
+    fillGradientBlob(ctx, this.pos.x, this.pos.y, outer, chosenShapeSpec.spikeAmp, centerColor, baseColor, blobOpacity);
   }
 }

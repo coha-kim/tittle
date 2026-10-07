@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const vm = require('node:vm');
 
-function harness() {
+function harness(render = false) {
+  const stops = [], glowAlphas = [];
   let now = 0;
   const elements = new Map();
   const element = (id) => {
@@ -26,17 +27,21 @@ function harness() {
       magSq() { return this.x ** 2 + this.y ** 2; },
       setMag(m) { const ratio = m / Math.hypot(this.x, this.y); this.x *= ratio; this.y *= ratio; },
     }),
-    background() {}, noStroke() {}, drawingContext: { save() {}, restore() {} },
+    background() {}, noStroke() {}, frameCount: 1,
+    red: () => 42, green: () => 146, blue: () => 132,
+    fill: (...args) => glowAlphas.push(args[3]), circle() {},
+    drawingContext: {
+      beginPath() {}, moveTo() {}, lineTo() {}, closePath() {}, fill() {},
+      createRadialGradient() { return { addColorStop: (offset, color) => stops.push(color) }; },
+    },
     window: {}, document: { getElementById: element, body: element('body') },
   });
   const run = (code) => vm.runInContext(code, context);
   run(readFileSync(new URL('../mobile/sketch.js', `file://${__filename}`), 'utf8'));
-  run(`wireUI(); appState = 'canvas';
-    Boid.prototype.renderGlow = function() {};
-    Boid.prototype.renderOrb = function() {};
-    boids = [new Boid(400, 500), new Boid(520, 500)];`);
+  run(`wireUI(); appState = 'canvas'; boids = [new Boid(400, 500), new Boid(520, 500)];`);
+  if (!render) run('Boid.prototype.renderGlow = function() {}; Boid.prototype.renderOrb = function() {};');
   return {
-    run,
+    run, stops, glowAlphas,
     frame() { now += 1000 / 60; run('draw()'); },
     shake() {
       run(`onMotion({ accelerationIncludingGravity: { x: 0, y: 0, z: 9.8 } });
@@ -96,4 +101,20 @@ test('pause and cancellation preserve fading, and canvas dragging cannot fake mo
   assert.equal(h.run('blobOpacity'), paused);
   h.run('motionSeen = false; lastShakeAt = -Infinity; mouseDragged()');
   assert.equal(h.run('lastShakeAt'), -Infinity);
+});
+
+
+test('real blob and glow drawing use the saved opacity, including fully transparent', () => {
+  const h = harness(true);
+  for (const opacity of [1, 0.5, 0]) {
+    h.run(`blobOpacity = ${opacity}`);
+    h.stops.length = 0; h.glowAlphas.length = 0;
+    h.frame();
+    assert.equal(h.stops.length, 4);
+    assert.ok(h.stops.every(color => color === `rgba(42, 146, 132, ${opacity})`));
+    assert.deepEqual(h.glowAlphas, [18 * opacity, 18 * opacity]);
+  }
+  h.stops.length = 0;
+  h.run('fillGradientBlob(drawingContext, 0, 0, 24, 0, centerColor, baseColor)');
+  assert.ok(h.stops.every(color => color === 'rgba(42, 146, 132, 1)'));
 });
