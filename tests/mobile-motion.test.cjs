@@ -26,7 +26,7 @@ function harness() {
       magSq() { return this.x ** 2 + this.y ** 2; },
       setMag(m) { const ratio = m / Math.hypot(this.x, this.y); this.x *= ratio; this.y *= ratio; },
     }),
-    background() {}, noStroke() {},
+    background() {}, noStroke() {}, drawingContext: { save() {}, restore() {} },
     window: {}, document: { getElementById: element, body: element('body') },
   });
   const run = (code) => vm.runInContext(code, context);
@@ -46,59 +46,54 @@ function harness() {
   };
 }
 
-test('idle sensor shake boosts wander step and clock, then settles without altering attraction', () => {
-  const h = harness();
-  h.frame();
-  assert.equal(h.run('wanderSpeed'), 1);
-  const before = h.run('noiseAccum');
-  h.shake();
-  h.frame();
-  assert.ok(h.run('wanderSpeed') > 1);
-  assert.ok(h.run('noiseAccum') - before > h.run('NOISE_BASE'));
-  assert.ok(Math.abs(h.run('Math.hypot(boids[0].autoVel.x, boids[0].autoVel.y) - MOVE_BASE_PX * wanderSpeed')) < 1e-10);
-  assert.equal(h.run('attraction'), h.run('ATTRACTION_IDLE'));
-  for (let i = 0; i < 600; i++) h.frame();
-  assert.ok(Math.abs(h.run('wanderSpeed') - 1) < 1e-8);
-  assert.equal(h.run('attraction'), h.run('ATTRACTION_IDLE'));
-});
-
-test('wander multiplier leaves pair attraction and core repulsion unchanged at identical positions', () => {
-  const h = harness();
-  for (const distance of [h.run('blobSize * 2.9'), h.run('blobSize * 1.5')]) {
-    h.run(`boids[1].pos.x = boids[0].pos.x + ${distance};
-      boids[0].wander(0, 1); boids[0].applyAttraction(boids, attraction);`);
-    const force = h.run('JSON.stringify(boids[0].attractForce)');
-    assert.notEqual(h.run('boids[0].attractForce.x'), 0);
-    h.run('boids[0].wander(0, 3); boids[0].applyAttraction(boids, attraction)');
-    assert.equal(h.run('JSON.stringify(boids[0].attractForce)'), force);
+test('idle shake and SIGNAL leave movement and pair forces unchanged', () => {
+  const a = harness(), b = harness();
+  b.event('signal', 'pointerdown');
+  for (let i = 0; i < 120; i++) {
+    b.shake(); a.frame(); b.frame();
+    assert.equal(a.run('JSON.stringify(boids.map(b => b.pos))'), b.run('JSON.stringify(boids.map(b => b.pos))'));
+  }
+  b.event('signal', 'pointerup');
+  for (let i = 0; i < 60; i++) {
+    b.shake(); a.frame(); b.frame();
+    assert.equal(a.run('JSON.stringify(boids.map(b => b.pos))'), b.run('JSON.stringify(boids.map(b => b.pos))'));
   }
 });
 
-test('SIGNAL ignores preceding idle shake and retains held-shake attraction control', () => {
+test('only shaking during a hold fades blobs; release retains opacity', () => {
   const h = harness();
-  h.shake();
+  h.shake(); h.frame();
+  assert.equal(h.run('blobOpacity'), 1);
   h.event('signal', 'pointerdown');
   h.frame();
-  assert.equal(h.run('liveAttraction'), h.run('ATTRACTION_IDLE'));
+  assert.equal(h.run('blobOpacity'), 1);
   for (let i = 0; i < 60; i++) { h.shake(); h.frame(); }
-  assert.ok(h.run('liveAttraction') < h.run('ATTRACTION_IDLE'));
-  assert.equal(h.run('wanderSpeed'), 1);
-  const held = h.run('liveAttraction');
+  assert.ok(Math.abs(h.run('blobOpacity') - 0.8) < 1e-9);
   h.event('signal', 'pointerup');
-  assert.equal(h.run('attraction'), held);
-  assert.equal(h.run('shakeEnergy'), 0);
+  const saved = h.run('blobOpacity');
+  for (let i = 0; i < 600; i++) { h.shake(); h.frame(); }
+  assert.equal(h.run('blobOpacity'), saved);
+  h.event('signal', 'pointerdown');
   h.frame();
-  assert.equal(h.run('wanderSpeed'), 1);
+  assert.equal(h.run('blobOpacity'), saved);
+  for (let i = 0; i < 300; i++) { h.shake(); h.frame(); }
+  assert.equal(h.run('blobOpacity'), 0);
+  h.event('signal', 'pointerup');
+  h.event('reset-btn', 'click');
+  assert.equal(h.run('blobOpacity'), 1);
 });
 
-test('saving shape and resetting flock clear residual speed energy', () => {
+test('pause and cancellation preserve fading, and canvas dragging cannot fake motion', () => {
   const h = harness();
-  for (const id of ['save-btn', 'reset-btn']) {
-    h.shake(); h.frame();
-    assert.ok(h.run('wanderSpeed') > 1);
-    h.event(id, 'click');
-    assert.equal(h.run('wanderSpeed'), 1);
-    assert.equal(h.run('shakeEnergy'), 0);
-    assert.equal(h.run('lastShakeAt'), -Infinity);
-  }
+  h.event('signal', 'pointerdown');
+  for (let i = 0; i < 30; i++) { h.shake(); h.frame(); }
+  for (let i = 0; i < 30; i++) h.frame(); // allow motion detection window to expire
+  const paused = h.run('blobOpacity');
+  for (let i = 0; i < 120; i++) h.frame();
+  assert.equal(h.run('blobOpacity'), paused);
+  h.event('signal', 'pointercancel');
+  h.shake(); h.frame();
+  assert.equal(h.run('blobOpacity'), paused);
+  h.run('motionSeen = false; lastShakeAt = -Infinity; mouseDragged()');
+  assert.equal(h.run('lastShakeAt'), -Infinity);
 });

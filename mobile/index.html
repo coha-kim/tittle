@@ -152,7 +152,7 @@
       color: #aeb6c2;
       font: 700 14px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       letter-spacing: .22em;
-      /* fill sweeps with live shake intensity (--level 0..1) while held */
+      /* fill shows accumulated transparency (--level 0..1) while held */
       background:
         linear-gradient(90deg, var(--accent, #2A9284) calc(var(--level, 0) * 100%), #15151b 0);
       box-shadow:
@@ -338,7 +338,7 @@
     </div>
   </div>
 
-  <button id="signal" type="button">SIGNAL</button>
+  <button id="signal" type="button" aria-label="Hold and shake to fade blobs">SIGNAL</button>
 
   <div id="panel-tab" role="button" aria-label="toggle panel" tabindex="0"></div>
   <aside id="panel">
