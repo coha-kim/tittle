@@ -31,7 +31,8 @@
 
 // ---- fixed config ----
 const NUM_BOIDS  = 10;
-const SEED_COLOR = '#49b6ff';
+const SEED_COLOR = '#2A9284';
+const BACKGROUND_COLOR = '#2A9284';
 
 // smooth radial gradient -- base colour on the rim, lightening toward white
 // at the centre.
@@ -347,7 +348,7 @@ function draw() {
 }
 
 function drawShapeScreen(dt) {
-  background(7, 7, 11);
+  background(BACKGROUND_COLOR);
 
   const target = constrain(shakeEnergy / SHAKE_FULL, 0, 1);
   shapeLevel += (target - shapeLevel) * Math.min(1, dt * SHAPE_LEVEL_EASE);
@@ -392,7 +393,7 @@ function drawCanvasScreen(dt) {
   }
   const currentAttraction = signaling ? liveAttraction : attraction;
 
-  background(7, 7, 11);
+  background(BACKGROUND_COLOR);
 
   for (const b of boids) b.wander(noiseAccum, wanderSpeed);
   for (const b of boids) b.applyAttraction(boids, currentAttraction);
